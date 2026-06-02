@@ -147,19 +147,33 @@ async def _spawn_claude(
             logger.debug("claude stderr: %s", stderr.decode("utf-8", errors="replace")[:500])
 
 
+def _resolve_claude_bin() -> str:
+    """Locate the claude binary at request time (PATH may be patched in tests)."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    # Honor an explicit override
+    override = os.environ.get("CLAUDE_CLI_PROXY_CLAUDE_BIN")
+    if override:
+        return override
+    raise RuntimeError("claude binary not found on PATH")
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="claude-cli-proxy")
-
-    claude_bin = shutil.which("claude") or "/Users/robert.ullery/.local/bin/claude"
     shim_module = "claude_cli_proxy.mcp_shim"
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
-        return {"status": "ok", "claude": claude_bin}
+        try:
+            return {"status": "ok", "claude": _resolve_claude_bin()}
+        except RuntimeError as exc:
+            return {"status": "degraded", "error": str(exc)}
 
     @app.post("/v1/messages")
     async def messages(request: Request) -> Any:
         body = await request.json()
+        claude_bin = _resolve_claude_bin()
         model = _resolve_model(body.get("model", "sonnet"))
         system = body.get("system")
         if isinstance(system, list):
