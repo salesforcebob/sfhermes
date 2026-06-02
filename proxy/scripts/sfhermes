@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# sfhermes — small CLI wrapper around `hermes` that adds proxy-aware helpers.
+#
+# Usage:
+#   sfhermes              → exec `hermes` (the upstream TUI)
+#   sfhermes <args...>    → exec `hermes <args...>`
+#   sfhermes doctor       → diagnose proxy + hermes setup
+#   sfhermes proxy start  → start the launchd agent
+#   sfhermes proxy stop   → stop the launchd agent
+#   sfhermes proxy status → show proxy health and PID
+#   sfhermes proxy log    → tail the proxy log
+#   sfhermes proxy reinstall-launcher → re-apply the on-demand launcher wrapper
+#
+# Without arguments or with arbitrary args, this just hands off to `hermes`
+# from the upstream venv. The `proxy` and `doctor` subcommands are the only
+# additions on top of the stock CLI.
+set -euo pipefail
+
+PROXY_PORT="${HERMES_PROXY_PORT:-8765}"
+PROXY_HOST="${HERMES_PROXY_HOST:-127.0.0.1}"
+LAUNCHD_LABEL="com.salesforcebob.sfhermes.proxy"
+HERMES_BIN="${HOME}/.hermes/hermes-agent/venv/bin/hermes"
+PROXY_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROXY_LOG="${HOME}/.hermes/logs/proxy.launchd.log"
+
+healthz() {
+    curl -sf --max-time 2 "http://${PROXY_HOST}:${PROXY_PORT}/healthz" 2>/dev/null
+}
+
+proxy_pid() {
+    lsof -ti ":${PROXY_PORT}" 2>/dev/null | head -1 || true
+}
+
+launchd_loaded() {
+    launchctl print "gui/$(id -u)/${LAUNCHD_LABEL}" >/dev/null 2>&1
+}
+
+cmd_proxy_status() {
+    local pid health
+    pid="$(proxy_pid)"
+    if health="$(healthz)"; then
+        echo "proxy: up (pid=${pid:-?})"
+        echo "       ${health}"
+    else
+        echo "proxy: down"
+    fi
+    if launchd_loaded; then
+        echo "launchd: loaded (${LAUNCHD_LABEL})"
+    else
+        echo "launchd: not loaded"
+    fi
+}
+
+cmd_proxy_start() {
+    if launchd_loaded; then
+        launchctl kickstart "gui/$(id -u)/${LAUNCHD_LABEL}"
+        echo "kickstarted ${LAUNCHD_LABEL}"
+    else
+        "${PROXY_REPO}/scripts/install-launchd.sh"
+    fi
+}
+
+cmd_proxy_stop() {
+    if launchd_loaded; then
+        launchctl bootout "gui/$(id -u)/${LAUNCHD_LABEL}" 2>/dev/null || true
+        echo "stopped (launchd unloaded)"
+    fi
+    local pid
+    pid="$(proxy_pid)"
+    if [[ -n "$pid" ]]; then
+        kill "$pid" 2>/dev/null || true
+        echo "killed manually-started pid=${pid}"
+    fi
+}
+
+cmd_proxy_log() {
+    if [[ -f "$PROXY_LOG" ]]; then
+        tail -F "$PROXY_LOG"
+    else
+        echo "no log at $PROXY_LOG yet" >&2
+        exit 1
+    fi
+}
+
+cmd_proxy_reinstall_launcher() {
+    "${PROXY_REPO}/scripts/install-launcher.sh"
+}
+
+cmd_doctor() {
+    echo "─── sfhermes doctor ─────────────────────────────"
+    cmd_proxy_status
+    echo
+    if [[ -x "$HERMES_BIN" ]]; then
+        echo "hermes: $HERMES_BIN ($($HERMES_BIN --version 2>&1 | head -1))"
+    else
+        echo "hermes: NOT FOUND at $HERMES_BIN"
+    fi
+    local conf="${HOME}/.hermes/config.yaml"
+    if [[ -f "$conf" ]]; then
+        local base_url
+        # Walk the model: block (indented lines following `model:`) and
+        # pull base_url. Plain bash to avoid python/pyyaml dependencies.
+        base_url=""
+        local in_model=false
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^model: ]]; then
+                in_model=true
+                continue
+            fi
+            if $in_model; then
+                # Exit when we hit a top-level (non-indented) key
+                if [[ "$line" =~ ^[^[:space:]#] ]]; then
+                    break
+                fi
+                if [[ "$line" =~ ^[[:space:]]+base_url:[[:space:]]*(.*) ]]; then
+                    base_url="${BASH_REMATCH[1]}"
+                    base_url="${base_url%\"}"
+                    base_url="${base_url#\"}"
+                    base_url="${base_url%\'}"
+                    base_url="${base_url#\'}"
+                    break
+                fi
+            fi
+        done < "$conf"
+        if [[ -n "$base_url" ]]; then
+            echo "config: model.base_url=${base_url}"
+            if [[ "$base_url" != *":${PROXY_PORT}"* ]]; then
+                echo "  ⚠ base_url does not point at the proxy port (${PROXY_PORT})"
+            fi
+        else
+            echo "config: model.base_url not set"
+            echo "  ⚠ Hermes will hit api.anthropic.com directly (will fail with OAuth-only tokens)"
+        fi
+    fi
+    local env_file="${HOME}/.hermes/.env"
+    if [[ -f "$env_file" ]] && grep -qE "^ANTHROPIC_API_KEY=" "$env_file"; then
+        echo "env: ANTHROPIC_API_KEY is set"
+    else
+        echo "env: ANTHROPIC_API_KEY not set"
+        echo "  ⚠ Hermes's anthropic transport requires the key to exist (any value works)"
+    fi
+}
+
+case "${1:-}" in
+    doctor)
+        cmd_doctor ;;
+    proxy)
+        shift
+        case "${1:-status}" in
+            status)              cmd_proxy_status ;;
+            start)               cmd_proxy_start ;;
+            stop)                cmd_proxy_stop ;;
+            log)                 cmd_proxy_log ;;
+            reinstall-launcher)  cmd_proxy_reinstall_launcher ;;
+            *) echo "unknown: sfhermes proxy $1" >&2; exit 2 ;;
+        esac ;;
+    "")
+        exec "$HERMES_BIN" ;;
+    *)
+        exec "$HERMES_BIN" "$@" ;;
+esac

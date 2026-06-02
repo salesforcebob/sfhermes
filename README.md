@@ -49,8 +49,13 @@ proxy/
     mcp_shim.py      # stdio MCP server that advertises Hermes's tools
     main.py          # `claude-cli-proxy --port 8765` entry point
   scripts/
-    hermes-launcher.sh    # wraps ~/.local/bin/hermes to auto-start the proxy
-    install-launcher.sh   # installs the wrapper (re-run after `hermes update`)
+    com.salesforcebob.sfhermes.proxy.plist  # launchd plist template
+    install-launchd.sh    # install + load launchd agent (recommended)
+    uninstall-launchd.sh  # unload + remove launchd agent
+    sfhermes              # CLI shim adding `sfhermes doctor` / `sfhermes proxy ...`
+    install-sfhermes.sh   # symlink ~/.local/bin/sfhermes → scripts/sfhermes
+    hermes-launcher.sh    # legacy: on-demand wrapper for ~/.local/bin/hermes
+    install-launcher.sh   # legacy: install hermes-launcher.sh (clobbers upstream)
 ```
 
 ## Setup
@@ -78,13 +83,38 @@ auth, but Hermes's anthropic transport requires the key to exist):
 ANTHROPIC_API_KEY=sk-ant-proxy-dummy
 ```
 
-Install the launcher wrapper so the proxy auto-starts when you run `hermes`:
+Install the launchd agent so the proxy auto-starts at login and survives crashes:
 
 ```bash
-./scripts/install-launcher.sh
+./scripts/install-launchd.sh
 ```
 
-After that, just run `hermes` as usual.
+Install the `sfhermes` CLI shim (adds `sfhermes doctor`, `sfhermes proxy
+{status,start,stop,log}` on top of stock `hermes`):
+
+```bash
+./scripts/install-sfhermes.sh
+```
+
+After that, run `hermes` as usual — the proxy is already up via launchd.
+
+### Diagnostics
+
+```bash
+sfhermes doctor              # check proxy + hermes config alignment
+sfhermes proxy status        # is the proxy running?
+sfhermes proxy log           # tail the proxy log
+sfhermes proxy stop          # stop launchd-managed proxy
+sfhermes proxy start         # restart launchd-managed proxy
+```
+
+### Alternative: on-demand launcher (no launchd)
+
+If you don't want a long-running background service, the older launcher
+wrapper at `scripts/hermes-launcher.sh` will start the proxy on the
+first `hermes` invocation. Install with `./scripts/install-launcher.sh`
+— but note this overwrites `~/.local/bin/hermes` and gets clobbered by
+`hermes update`. The launchd path is recommended.
 
 ## Caveats
 
@@ -94,7 +124,7 @@ After that, just run `hermes` as usual.
   sentinel if claude actually tries to invoke a tool; `--max-turns 1`
   ensures claude exits after the first `tool_use` block, before the shim
   is hit.
-- **`hermes update` clobbers the launcher wrapper.** Re-run
-  `./scripts/install-launcher.sh` after upgrading Hermes.
+- **launchd survives `hermes update`.** Only the legacy on-demand
+  launcher wrapper is at risk — and it's not used by default.
 - **No streaming-mid-block deltas.** claude emits whole content blocks at
   a time, so SSE deltas arrive in chunks rather than token-by-token.

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.salesforcebob.sfhermes.proxy</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PROXY_BIN__</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8765</string>
+    </array>
+
+    <!-- Start at login and keep alive across crashes -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <!-- Throttle relaunches to avoid tight crash loops -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Inherit a sane PATH (claude lives in ~/.local/bin) -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__USER_HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>__USER_HOME__/.hermes/logs/proxy.launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>__USER_HOME__/.hermes/logs/proxy.launchd.log</string>
+
+    <!-- Run from the home directory so any relative paths resolve sanely -->
+    <key>WorkingDirectory</key>
+    <string>__USER_HOME__</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
