@@ -170,6 +170,58 @@ def create_app() -> FastAPI:
         except RuntimeError as exc:
             return {"status": "degraded", "error": str(exc)}
 
+    # Anthropic-compatible model discovery. Clients (Hermes, NemoClaw's
+    # gateway router) probe these before sending /v1/messages so they can
+    # populate model pickers and validate the configured model exists.
+    # We expose the canonical Claude family — claude itself routes to
+    # whichever backend (Bedrock, OAuth, etc.) it's authenticated against.
+    _CATALOG = [
+        {
+            "type": "model",
+            "id": "claude-sonnet-4-5",
+            "display_name": "Claude Sonnet 4.5",
+            "created_at": "2025-09-29T00:00:00Z",
+        },
+        {
+            "type": "model",
+            "id": "claude-opus-4-5",
+            "display_name": "Claude Opus 4.5",
+            "created_at": "2025-10-15T00:00:00Z",
+        },
+        {
+            "type": "model",
+            "id": "claude-opus-4-6",
+            "display_name": "Claude Opus 4.6",
+            "created_at": "2026-01-15T00:00:00Z",
+        },
+        {
+            "type": "model",
+            "id": "claude-opus-4-7",
+            "display_name": "Claude Opus 4.7",
+            "created_at": "2026-04-01T00:00:00Z",
+        },
+        {
+            "type": "model",
+            "id": "claude-haiku-4-5",
+            "display_name": "Claude Haiku 4.5",
+            "created_at": "2025-10-01T00:00:00Z",
+        },
+    ]
+
+    @app.get("/v1/models")
+    async def list_models() -> dict[str, Any]:
+        return {"data": _CATALOG, "has_more": False, "first_id": _CATALOG[0]["id"], "last_id": _CATALOG[-1]["id"]}
+
+    @app.get("/v1/models/{model_id}")
+    async def get_model(model_id: str) -> Any:
+        # Be permissive — match by full id or alias.
+        target = _resolve_model(model_id)
+        for m in _CATALOG:
+            if m["id"] == model_id or m["id"] == target:
+                return m
+        # Return a synthetic record so clients don't bail
+        return {"type": "model", "id": model_id, "display_name": model_id, "created_at": "2026-01-01T00:00:00Z"}
+
     @app.post("/v1/messages")
     async def messages(request: Request) -> Any:
         body = await request.json()
